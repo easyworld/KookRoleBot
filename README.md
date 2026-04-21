@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 仅响应拥有 **"管理员"** 角色的用户的 @mention 消息
+- 仅响应拥有 **管理员角色**（可在 `config.json` 中配置，默认为"管理员"）的用户的 @mention 消息
 - 通过命令为指定用户授予角色并设置过期时间
 - 支持过期时间累加（已有未过期记录时在原时间上追加）
 - 每分钟自动扫描并移除过期角色
@@ -59,9 +59,16 @@
 ```json
 {
   "Token": "在此填写你的 Kook Bot Token",
-  "DatabasePath": "kookbot.db"
+  "DatabasePath": "kookbot.db",
+  "AdminRoleName": "管理员"
 }
 ```
+
+| 字段 | 说明 |
+|------|------|
+| `Token` | Kook Bot Token |
+| `DatabasePath` | SQLite 数据库文件路径，默认 `kookbot.db` |
+| `AdminRoleName` | 允许操作的管理员角色名称，默认 `"管理员"` |
 
 填写完成后重新启动即可。
 
@@ -74,7 +81,7 @@ dotnet run
 ## 服务器设置
 
 1. 将机器人邀请到 KOOK 服务器
-2. 在服务器中创建 **"管理员"** 角色（名称必须完全匹配）
+2. 在服务器中创建管理员角色（名称需与 `config.json` 中 `AdminRoleName` 一致，默认为"管理员"）
 3. 创建需要管理的业务角色（如 `vip`、`premium` 等）
 4. 确保 bot 角色拥有 **管理角色** 权限，且 bot 角色高于被管理的角色
 
@@ -120,7 +127,7 @@ dotnet run
 管理员发送: @机器人 @用户A vip +7d
                     │
                     ▼
-            校验发送者是否有"管理员"角色
+            校验发送者是否有管理员角色（AdminRoleName）
                     │
                     ▼
             解析目标用户、角色名、时长

@@ -10,9 +10,9 @@ const string configPath = "config.json";
 
 if (!File.Exists(configPath))
 {
-    var defaultConfig = new BotConfig(Token: "在此填写你的 Kook Bot Token", DatabasePath: "kookbot.db");
+    var defaultConfig = new BotConfig(Token: "在此填写你的 Kook Bot Token", DatabasePath: "kookbot.db", AdminRoleName: "管理员");
     await File.WriteAllTextAsync(configPath,
-        JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true }));
+        JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
     Console.WriteLine($"已生成配置文件 {configPath}，请填写 Kook 机器人的 Bot Token 后重新启动。");
     return;
 }
@@ -36,7 +36,7 @@ client.Log += log =>
     return Task.CompletedTask;
 };
 
-client.MessageReceived += (message, guildUser, textChannel) => HandleMessageAsync(client, db, message, guildUser, textChannel);
+client.MessageReceived += (message, guildUser, textChannel) => HandleMessageAsync(client, db, config, message, guildUser, textChannel);
 
 await client.LoginAsync(TokenType.Bot, config.Token);
 await client.StartAsync();
@@ -56,7 +56,7 @@ try
 }
 catch (OperationCanceledException) { }
 
-static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, SocketMessage message,
+static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, BotConfig config, SocketMessage message,
     SocketGuildUser sender, SocketTextChannel channel)
 {
     try
@@ -66,7 +66,8 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, So
     var guild = channel.Guild;
     if (guild == null) return;
 
-    if (!sender.Roles.Any(r => r.Name == "管理员")) return;
+    var adminRoleName = config.AdminRoleName ?? "管理员";
+    if (!sender.Roles.Any(r => r.Name == adminRoleName)) return;
 
     var currentUserId = client.CurrentUser?.Id ?? 0;
     if (!message.MentionedUserIds.Contains(currentUserId)) return;
@@ -220,4 +221,4 @@ static async Task CheckExpiredRolesAsync(KookSocketClient client, BotDatabase db
     }
 }
 
-record BotConfig(string Token, string? DatabasePath);
+record BotConfig(string Token, string? DatabasePath, string? AdminRoleName);

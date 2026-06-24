@@ -127,20 +127,20 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
 
         var existing = await db.GetExpirationAsync(guild.Id, guildUser.Id, role.Id);
         DateTime newExpiration;
-        if (existing.HasValue && existing.Value > DateTime.Now)
+        if (existing.HasValue && existing.Value > DateTime.UtcNow)
         {
             newExpiration = existing.Value.Add(duration.Value);
-            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 已延期至 {newExpiration:yyyy-MM-dd HH:mm:ss}");
+            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 已延期至 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
         }
         else
         {
-            newExpiration = DateTime.Now.Add(duration.Value);
-            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 将于 {newExpiration:yyyy-MM-dd HH:mm:ss} 过期");
+            newExpiration = DateTime.UtcNow.Add(duration.Value);
+            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 将于 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss} 过期");
         }
 
         await db.SetExpirationAsync(guild.Id, guildUser.Id, role.Id, newExpiration);
         var action = alreadyHasRole ? "已延期" : "已授予";
-        replies.Add($"✅ {guildUser.Username}#{guildUser.IdentifyNumber} → {roleName} {action}，到期时间：{newExpiration:yyyy-MM-dd HH:mm:ss}");
+        replies.Add($"✅ {guildUser.Username}#{guildUser.IdentifyNumber} → {roleName} {action}，到期时间：{newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
     }
 
     if (replies.Count > 0)

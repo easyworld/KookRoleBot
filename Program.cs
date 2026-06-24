@@ -127,14 +127,14 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
 
         var existing = await db.GetExpirationAsync(guild.Id, guildUser.Id, role.Id);
         DateTime newExpiration;
-        if (existing.HasValue && existing.Value > DateTime.UtcNow)
+        if (existing.HasValue && existing.Value > DateTime.Now)
         {
             newExpiration = existing.Value.Add(duration.Value);
             Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 已延期至 {newExpiration:yyyy-MM-dd HH:mm:ss}");
         }
         else
         {
-            newExpiration = DateTime.UtcNow.Add(duration.Value);
+            newExpiration = DateTime.Now.Add(duration.Value);
             Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 将于 {newExpiration:yyyy-MM-dd HH:mm:ss} 过期");
         }
 

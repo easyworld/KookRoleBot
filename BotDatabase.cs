@@ -58,7 +58,7 @@ public sealed class BotDatabase : IAsyncDisposable
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = "SELECT GuildId, UserId, RoleId FROM RoleExpirations WHERE ExpiresAt <= $now";
-        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        cmd.Parameters.AddWithValue("$now", DateTime.Now.ToString("O"));
         var results = new List<(ulong, ulong, uint)>();
         using var reader = await cmd.ExecuteReaderAsync();
         while (await reader.ReadAsync())

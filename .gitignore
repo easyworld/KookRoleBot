@@ -34,3 +34,6 @@ Thumbs.db
 ## .NET
 *.swp
 *~
+
+## Claude Code
+.claude/

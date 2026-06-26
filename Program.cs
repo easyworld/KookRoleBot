@@ -92,11 +92,18 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
     }
 
     var roleName = parts[0];
-    var durationStr = string.Join(" ", parts[1..]);
-    var duration = ParseDuration(durationStr);
+    var actionStr = string.Join(" ", parts[1..]);
+
+    if (actionStr.Equals("-del", StringComparison.OrdinalIgnoreCase))
+    {
+        await HandleDeleteRoleAsync(guild, db, targetUserIds, channel, message, roleName);
+        return;
+    }
+
+    var duration = ParseDuration(actionStr);
     if (duration == null)
     {
-        await channel.SendTextAsync("时长格式错误。请使用 +Nd（如 +1d, +7d）", quote: new MessageReference(message.Id));
+        await channel.SendTextAsync("时长格式错误。请使用 +Nd（如 +1d, +7d），或使用 -del 删除角色", quote: new MessageReference(message.Id));
         return;
     }
 
@@ -166,6 +173,52 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
     catch (Exception ex)
     {
         Console.WriteLine($"[Error] HandleMessage: {ex}");
+    }
+}
+
+static async Task HandleDeleteRoleAsync(SocketGuild guild, BotDatabase db, List<ulong> targetUserIds, SocketTextChannel channel, SocketMessage message, string roleName)
+{
+    var role = guild.Roles.FirstOrDefault(r => r.Name == roleName);
+    if (role == null)
+    {
+        await channel.SendTextAsync($"服务器中不存在角色 \"{roleName}\"", quote: new MessageReference(message.Id));
+        return;
+    }
+
+    var replies = new List<string>();
+    foreach (var userId in targetUserIds)
+    {
+        var guildUser = guild.GetUser(userId);
+        if (guildUser == null)
+        {
+            replies.Add($"用户 ID:{userId} 不在服务器中");
+            continue;
+        }
+
+        var hasRole = guildUser.Roles.Any(r => r.Id == role.Id);
+        if (hasRole)
+        {
+            await guildUser.RemoveRoleAsync(role);
+            Console.WriteLine($"[Role] 移除角色 \"{roleName}\" 从 {guildUser.Username}#{guildUser.IdentifyNumber}");
+        }
+
+        await db.RemoveExpirationAsync(guild.Id, guildUser.Id, role.Id);
+
+        if (hasRole)
+        {
+            replies.Add($"❌ {guildUser.Username}#{guildUser.IdentifyNumber} → {roleName} 已移除");
+        }
+        else
+        {
+            replies.Add($"{guildUser.Username}#{guildUser.IdentifyNumber} 没有 {roleName} 角色，无需移除");
+        }
+    }
+
+    if (replies.Count > 0)
+    {
+        var replyText = string.Join("\n", replies);
+        Console.WriteLine($"[Reply] {replyText}");
+        await channel.SendTextAsync(replyText, quote: new MessageReference(message.Id));
     }
 }
 

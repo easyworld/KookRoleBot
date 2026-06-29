@@ -82,7 +82,7 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
         return;
     }
 
-    var content = Regex.Replace(message.Content, @"\(met\)[^()]*\(met\)", "").Trim();
+    var content = Regex.Replace(message.Content, @"\(met\)[^()]*\(met\)|\(rol\)[^()]*\(rol\)|\(chn\)[^()]*\(chn\)", "").Trim();
 
     var parts = content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
     if (parts.Length < 2)
@@ -165,6 +165,7 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
             HttpStatusCode.NotFound => "目标用户或角色不存在。请检查角色名称是否正确。",
             HttpStatusCode.BadRequest => "请求参数错误。请检查命令格式是否正确。",
             HttpStatusCode.TooManyRequests => "操作过于频繁，请稍后再试。",
+            HttpStatusCode.OK => $"Bot 缺少权限：{ex.Reason}。请在服务器设置中：1) 给 Bot 角色开启「角色管理」权限；2) 确保 Bot 角色排在被管理的角色之上。",
             _ => $"服务器返回错误 ({(int)ex.HttpCode}): {ex.Reason}"
         };
         Console.WriteLine($"[Error] {msg}");

@@ -32,7 +32,7 @@ await db.InitializeAsync();
 
 client.Log += log =>
 {
-    Console.WriteLine($"[{log.Severity}] {log.Source}: {log.Message ?? log.Exception?.Message}");
+    Log(log.Severity.ToString(), $"{log.Source}: {log.Message ?? log.Exception?.ToString()}");
     return Task.CompletedTask;
 };
 
@@ -41,7 +41,7 @@ client.MessageReceived += (message, guildUser, textChannel) => HandleMessageAsyn
 await client.LoginAsync(TokenType.Bot, config.Token);
 await client.StartAsync();
 
-Console.WriteLine("Bot started. Press Ctrl+C to exit.");
+Log("Startup", $"Bot started as {client.CurrentUser?.Username ?? "unknown"} (ID:{client.CurrentUser?.Id.ToString() ?? "unknown"}). Press Ctrl+C to exit.");
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = false; cts.Cancel(); };
@@ -63,14 +63,36 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
     {
     if (message.Author?.Id == client.CurrentUser?.Id) return;
 
+    Log("Message", $"收到消息 ID:{message.Id}, Guild:{channel.Guild?.Id.ToString() ?? "unknown"}, Channel:{channel.Id}, " +
+        $"Sender:{sender.Username}#{sender.IdentifyNumber} (ID:{sender.Id}), Content:{ToLogValue(message.Content)}, " +
+        $"MentionedUserIds:[{string.Join(",", message.MentionedUserIds)}]");
+
     var guild = channel.Guild;
-    if (guild == null) return;
+    if (guild == null)
+    {
+        Log("Ignored", $"消息 ID:{message.Id} 无法取得服务器信息");
+        return;
+    }
 
     var adminRoleName = config.AdminRoleName ?? "管理员";
-    if (!sender.Roles.Any(r => r.Name == adminRoleName)) return;
+    if (!sender.Roles.Any(r => r.Name == adminRoleName))
+    {
+        Log("Ignored", $"消息 ID:{message.Id} 的发送者没有管理员角色 {ToLogValue(adminRoleName)}；" +
+            $"发送者缓存角色:[{string.Join(", ", sender.Roles.Select(r => $"{r.Name}(ID:{r.Id})"))}]");
+        return;
+    }
 
     var currentUserId = client.CurrentUser?.Id ?? 0;
-    if (!message.MentionedUserIds.Contains(currentUserId)) return;
+    if (currentUserId == 0)
+    {
+        Log("ParseRejected", $"消息 ID:{message.Id} 到达时 Bot 用户信息尚未就绪");
+        return;
+    }
+    if (!message.MentionedUserIds.Contains(currentUserId))
+    {
+        Log("Ignored", $"消息 ID:{message.Id} 没有 @Bot (Bot ID:{currentUserId})");
+        return;
+    }
 
     var targetUserIds = message.MentionedUserIds
         .Where(id => id != currentUserId)
@@ -78,15 +100,18 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
 
     if (targetUserIds.Count == 0)
     {
+        Log("ParseRejected", $"消息 ID:{message.Id} 没有目标用户；MentionedUserIds:[{string.Join(",", message.MentionedUserIds)}]");
         await channel.SendTextAsync("请 @mention 需要添加角色的用户。格式：@机器人 @用户 角色名 +时长", quote: new MessageReference(message.Id));
         return;
     }
 
     var content = Regex.Replace(message.Content, @"\(met\)[^()]*\(met\)|\(rol\)[^()]*\(rol\)|\(chn\)[^()]*\(chn\)", "").Trim();
+    Log("Parse", $"消息 ID:{message.Id} 移除 mention 后的正文:{ToLogValue(content)}，目标用户:[{string.Join(",", targetUserIds)}]");
 
     var parts = content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
     if (parts.Length < 2)
     {
+        Log("ParseRejected", $"消息 ID:{message.Id} 正文字段不足；解析字段:[{string.Join(", ", parts.Select(ToLogValue))}]");
         await channel.SendTextAsync("格式错误。正确格式：@机器人 @用户 角色名 +时长（如 +1d）", quote: new MessageReference(message.Id));
         return;
     }
@@ -96,6 +121,7 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
 
     if (actionStr.Equals("-del", StringComparison.OrdinalIgnoreCase))
     {
+        Log("Command", $"消息 ID:{message.Id} 解析为删除角色；Role:{ToLogValue(roleName)}, Targets:[{string.Join(",", targetUserIds)}]");
         await HandleDeleteRoleAsync(guild, db, targetUserIds, channel, message, roleName);
         return;
     }
@@ -103,33 +129,65 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
     var duration = ParseDuration(actionStr);
     if (duration == null)
     {
+        Log("ParseRejected", $"消息 ID:{message.Id} 时长无法解析；Role:{ToLogValue(roleName)}, Duration:{ToLogValue(actionStr)}");
         await channel.SendTextAsync("时长格式错误。请使用 +Nd（如 +1d, +7d），或使用 -del 删除角色", quote: new MessageReference(message.Id));
         return;
     }
 
+    Log("Command", $"消息 ID:{message.Id} 解析为授予角色；Role:{ToLogValue(roleName)}, Duration:{duration.Value.TotalDays}d, " +
+        $"Targets:[{string.Join(",", targetUserIds)}]");
+
     var role = guild.Roles.FirstOrDefault(r => r.Name == roleName);
     if (role == null)
     {
+        Log("RoleRejected", $"消息 ID:{message.Id} 找不到角色 {ToLogValue(roleName)}；" +
+            $"服务器缓存角色:[{string.Join(", ", guild.Roles.Select(r => $"{r.Name}(ID:{r.Id})"))}]");
         await channel.SendTextAsync($"服务器中不存在角色 \"{roleName}\"", quote: new MessageReference(message.Id));
         return;
     }
 
+    Log("RoleState", $"准备通过 REST 刷新服务器用户状态；Message:{message.Id}, Guild:{guild.Id}");
+    var restGuild = await client.Rest.GetGuildAsync(guild.Id);
     var replies = new List<string>();
     foreach (var userId in targetUserIds)
     {
         var guildUser = guild.GetUser(userId);
         if (guildUser == null)
         {
+            Log("RoleRejected", $"消息 ID:{message.Id} 无法从服务器缓存取得目标用户 ID:{userId}");
             replies.Add($"用户 ID:{userId} 不在服务器中");
             continue;
         }
 
-        var alreadyHasRole = guildUser.Roles.Any(r => r.Id == role.Id);
-
-        if (!alreadyHasRole)
+        var cacheHasRole = guildUser.Roles.Any(r => r.Id == role.Id);
+        var refreshedUser = await restGuild.GetUserAsync(userId);
+        if (refreshedUser == null)
         {
-            await guildUser.AddRoleAsync(role);
-            Console.WriteLine($"[Role] 授予角色 \"{roleName}\" 给 {guildUser.Username}#{guildUser.IdentifyNumber}");
+            Log("RoleRejected", $"消息 ID:{message.Id} 通过 REST 无法取得目标用户 ID:{userId}");
+            replies.Add($"用户 ID:{userId} 不在服务器中");
+            continue;
+        }
+
+        var serverHasRole = refreshedUser.RoleIds.Contains(role.Id);
+        Log("RoleState", $"已刷新角色状态；Message:{message.Id}, Guild:{guild.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+            $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id}), CacheHasRole:{cacheHasRole}, ServerHasRole:{serverHasRole}");
+
+        if (!serverHasRole)
+        {
+            Log("RoleGrant", $"准备调用 KOOK 授予接口；Message:{message.Id}, Guild:{guild.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+                $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id})");
+            try
+            {
+                await refreshedUser.AddRoleAsync(role.Id);
+                Log("RoleGrant", $"KOOK 授予接口成功；Message:{message.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+                    $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id})");
+            }
+            catch (Exception ex)
+            {
+                Log("RoleGrantFailed", $"KOOK 授予接口失败；Message:{message.Id}, Guild:{guild.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+                    $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id}), Error:{ex}");
+                throw;
+            }
         }
 
         var existing = await db.GetExpirationAsync(guild.Id, guildUser.Id, role.Id);
@@ -137,23 +195,23 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
         if (existing.HasValue && existing.Value > DateTime.UtcNow)
         {
             newExpiration = existing.Value.Add(duration.Value);
-            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 已延期至 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+            Log("Timer", $"{guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 已延期至 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
         }
         else
         {
             newExpiration = DateTime.UtcNow.Add(duration.Value);
-            Console.WriteLine($"[Timer] {guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 将于 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss} 过期");
+            Log("Timer", $"{guildUser.Username}#{guildUser.IdentifyNumber} 的角色 \"{roleName}\" 将于 {newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss} 过期");
         }
 
         await db.SetExpirationAsync(guild.Id, guildUser.Id, role.Id, newExpiration);
-        var action = alreadyHasRole ? "已延期" : "已授予";
+        var action = existing.HasValue && existing.Value > DateTime.UtcNow ? "已确认角色并延期" : "已授予";
         replies.Add($"✅ {guildUser.Username}#{guildUser.IdentifyNumber} → {roleName} {action}，到期时间：{newExpiration.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
     }
 
     if (replies.Count > 0)
     {
         var replyText = string.Join("\n", replies);
-        Console.WriteLine($"[Reply] {replyText}");
+        Log("Reply", replyText);
         await channel.SendTextAsync(replyText, quote: new MessageReference(message.Id));
     }
     }
@@ -168,12 +226,20 @@ static async Task HandleMessageAsync(KookSocketClient client, BotDatabase db, Bo
             HttpStatusCode.OK => $"Bot 缺少权限：{ex.Reason}。请在服务器设置中：1) 给 Bot 角色开启「角色管理」权限；2) 确保 Bot 角色排在被管理的角色之上。",
             _ => $"服务器返回错误 ({(int)ex.HttpCode}): {ex.Reason}"
         };
-        Console.WriteLine($"[Error] {msg}");
-        try { await channel.SendTextAsync(msg, quote: new MessageReference(message.Id)); } catch { }
+        Log("HttpError", $"Message:{message.Id}, Status:{(int)ex.HttpCode} ({ex.HttpCode}), Reason:{ex.Reason}, Exception:{ex}");
+        try
+        {
+            await channel.SendTextAsync(msg, quote: new MessageReference(message.Id));
+        }
+        catch (Exception replyException)
+        {
+            Log("ReplyFailed", $"发送错误提示失败；Message:{message.Id}, Error:{replyException}");
+        }
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[Error] HandleMessage: {ex}");
+        Log("UnhandledError", $"处理消息失败；Message:{message.Id}, Guild:{channel.Guild?.Id.ToString() ?? "unknown"}, " +
+            $"Channel:{channel.Id}, Sender:{sender.Id}, Content:{ToLogValue(message.Content)}, Error:{ex}");
     }
 }
 
@@ -182,6 +248,7 @@ static async Task HandleDeleteRoleAsync(SocketGuild guild, BotDatabase db, List<
     var role = guild.Roles.FirstOrDefault(r => r.Name == roleName);
     if (role == null)
     {
+        Log("RoleRejected", $"消息 ID:{message.Id} 找不到待删除角色 {ToLogValue(roleName)}");
         await channel.SendTextAsync($"服务器中不存在角色 \"{roleName}\"", quote: new MessageReference(message.Id));
         return;
     }
@@ -192,6 +259,7 @@ static async Task HandleDeleteRoleAsync(SocketGuild guild, BotDatabase db, List<
         var guildUser = guild.GetUser(userId);
         if (guildUser == null)
         {
+            Log("RoleRejected", $"消息 ID:{message.Id} 无法从服务器缓存取得待操作用户 ID:{userId}");
             replies.Add($"用户 ID:{userId} 不在服务器中");
             continue;
         }
@@ -199,8 +267,11 @@ static async Task HandleDeleteRoleAsync(SocketGuild guild, BotDatabase db, List<
         var hasRole = guildUser.Roles.Any(r => r.Id == role.Id);
         if (hasRole)
         {
+            Log("RoleRemove", $"准备移除角色；Message:{message.Id}, Guild:{guild.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+                $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id})");
             await guildUser.RemoveRoleAsync(role);
-            Console.WriteLine($"[Role] 移除角色 \"{roleName}\" 从 {guildUser.Username}#{guildUser.IdentifyNumber}");
+            Log("RoleRemove", $"KOOK 移除接口成功；Message:{message.Id}, User:{guildUser.Username}#{guildUser.IdentifyNumber} " +
+                $"(ID:{guildUser.Id}), Role:{role.Name} (ID:{role.Id})");
         }
 
         await db.RemoveExpirationAsync(guild.Id, guildUser.Id, role.Id);
@@ -218,14 +289,14 @@ static async Task HandleDeleteRoleAsync(SocketGuild guild, BotDatabase db, List<
     if (replies.Count > 0)
     {
         var replyText = string.Join("\n", replies);
-        Console.WriteLine($"[Reply] {replyText}");
+        Log("Reply", replyText);
         await channel.SendTextAsync(replyText, quote: new MessageReference(message.Id));
     }
 }
 
 static TimeSpan? ParseDuration(string input)
 {
-    var match = Regex.Match(input, @"\+?(\d+)d", RegexOptions.IgnoreCase);
+    var match = Regex.Match(input, @"^\+?(\d+)d$", RegexOptions.IgnoreCase);
     if (match.Success && int.TryParse(match.Groups[1].Value, out var days) && days > 0)
         return TimeSpan.FromDays(days);
     return null;
@@ -254,15 +325,16 @@ static async Task CheckExpiredRolesAsync(KookSocketClient client, BotDatabase db
                 try
                 {
                     await user.RemoveRoleAsync(role);
-                    Console.WriteLine($"[Expired] 已移除 {user.Username}#{user.IdentifyNumber} 的过期角色 \"{role.Name}\"");
+                    Log("Expired", $"已移除 {user.Username}#{user.IdentifyNumber} 的过期角色 \"{role.Name}\"");
                 }
                 catch (KookHttpException ex)
                 {
-                    Console.WriteLine($"[Error] 移除角色 {role.Name} 失败 ({(int)ex.HttpCode}): {ex.Reason}。请检查 Bot 是否拥有「角色管理」权限且角色层级足够高。");
+                    Log("RoleRemoveFailed", $"移除过期角色失败；Guild:{guildId}, User:{userId}, Role:{role.Name} (ID:{roleId}), " +
+                        $"Status:{(int)ex.HttpCode} ({ex.HttpCode}), Reason:{ex.Reason}, Error:{ex}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Failed to remove role {role.Name} from {user.Username}: {ex.Message}");
+                    Log("RoleRemoveFailed", $"移除过期角色失败；Guild:{guildId}, User:{userId}, Role:{role.Name} (ID:{roleId}), Error:{ex}");
                 }
             }
 
@@ -271,8 +343,13 @@ static async Task CheckExpiredRolesAsync(KookSocketClient client, BotDatabase db
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"Error checking expired roles: {ex.Message}");
+        Log("ExpirationError", $"检查过期角色失败：{ex}");
     }
 }
+
+static void Log(string category, string message) =>
+    Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{category}] {message}");
+
+static string ToLogValue(string? value) => JsonSerializer.Serialize(value);
 
 record BotConfig(string Token, string? DatabasePath, string? AdminRoleName);
